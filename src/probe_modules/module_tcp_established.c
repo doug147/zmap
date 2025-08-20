@@ -319,60 +319,61 @@ static void tcp_established_process_packet(const u_char *packet,
     struct ip *ip_hdr = (struct ip *)&packet[sizeof(struct ether_header)];
     struct tcphdr *tcp = (struct tcphdr *)((char *)ip_hdr + 4 * ip_hdr->ip_hl);
     
-    // Add basic TCP fields
+    // Add fields in EXACT order as declared in fields[] array
+    // Order: sport, dport, seqnum, acknum, window, tcp_flags, classification, success, data_len, timestamp_ts, timestamp_us
+    
+    // 1-5: Basic TCP fields
     fs_add_uint64(fs, "sport", (uint64_t)ntohs(tcp->th_sport));
     fs_add_uint64(fs, "dport", (uint64_t)ntohs(tcp->th_dport));
     fs_add_uint64(fs, "seqnum", (uint64_t)ntohl(tcp->th_seq));
     fs_add_uint64(fs, "acknum", (uint64_t)ntohl(tcp->th_ack));
     fs_add_uint64(fs, "window", (uint64_t)ntohs(tcp->th_win));
     
-    // Classify response based on TCP flags
+    // 6: tcp_flags - MUST BE ADDED HERE, BEFORE classification!
+    fs_add_uint64(fs, "tcp_flags", (uint64_t)tcp->th_flags);
+    
+    // Now determine classification and data_len values
+    const char *classification;
+    int success;
+    uint32_t data_len = 0;
+    
     if (tcp->th_flags & TH_RST) {
-        // RST means port is closed or connection rejected
-        fs_add_string(fs, "classification", (char *)"rst", 0);
-        fs_add_bool(fs, "success", 0);
+        classification = "rst";
+        success = 0;
     } else if ((tcp->th_flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
-        // SYN-ACK shouldn't happen for established packets, but indicates open port
-        fs_add_string(fs, "classification", (char *)"synack", 0);
-        fs_add_bool(fs, "success", 1);
+        classification = "synack";
+        success = 1;
     } else if (tcp->th_flags & TH_ACK) {
         // Check if response contains data
         uint32_t tcp_hdr_len = tcp->th_off * 4;
         uint32_t ip_hdr_len = ip_hdr->ip_hl * 4;
         uint32_t ip_total_len = ntohs(ip_hdr->ip_len);
-        uint32_t data_len = 0;
         
         if (ip_total_len > (ip_hdr_len + tcp_hdr_len)) {
             data_len = ip_total_len - ip_hdr_len - tcp_hdr_len;
         }
         
         if (data_len > 0) {
-            // Received data in response
-            fs_add_string(fs, "classification", (char *)"data", 0);
-            fs_add_bool(fs, "success", 1);
-            fs_add_uint64(fs, "data_len", (uint64_t)data_len);
+            classification = "data";
+            success = 1;
         } else {
-            // Just ACK, no data
-            fs_add_string(fs, "classification", (char *)"ack", 0);
-            fs_add_bool(fs, "success", 1);
-            fs_add_uint64(fs, "data_len", 0);
+            classification = "ack";
+            success = 1;
         }
     } else if (tcp->th_flags & TH_FIN) {
-        // FIN flag - connection termination
-        fs_add_string(fs, "classification", (char *)"fin", 0);
-        fs_add_bool(fs, "success", 0);
-        fs_add_uint64(fs, "data_len", 0);
+        classification = "fin";
+        success = 0;
     } else {
-        // Other response
-        fs_add_string(fs, "classification", (char *)"other", 0);
-        fs_add_bool(fs, "success", 0);
-        fs_add_uint64(fs, "data_len", 0);
+        classification = "other";
+        success = 0;
     }
     
-    // Add TCP flags as integer
-    fs_add_uint64(fs, "tcp_flags", (uint64_t)tcp->th_flags);
+    // 7-9: Classification, success, and data_len
+    fs_add_string(fs, "classification", (char *)classification, 0);
+    fs_add_bool(fs, "success", success);
+    fs_add_uint64(fs, "data_len", (uint64_t)data_len);
     
-    // Add timestamp
+    // 10-11: Timestamps
     fs_add_uint64(fs, "timestamp_ts", (uint64_t)ts.tv_sec);
     fs_add_uint64(fs, "timestamp_us", (uint64_t)ts.tv_nsec / 1000);
 }
