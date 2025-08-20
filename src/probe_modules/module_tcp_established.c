@@ -18,7 +18,6 @@
 #include <assert.h>
 
 #include "../../lib/includes.h"
-#include "../../lib/random.h"
 #include "../fieldset.h"
 #include "logger.h"
 #include "module_tcp_established.h"
@@ -32,7 +31,6 @@ probe_module_t module_tcp_established;
 static uint32_t num_ports;
 static char *payload = NULL;
 static uint16_t payload_len = 0;
-static uint8_t packet_header_size = TCP_ESTABLISHED_PACKET_HEADER_SIZE;
 
 // Process escape sequences in the payload string
 char* tcp_established_process_escape_sequences(const char *input, int *out_len)
@@ -187,11 +185,11 @@ static int tcp_established_global_initialize(struct state_conf *state)
                 "payload configured: %d bytes", payload_len);
         
         // Update module packet length
-        module_tcp_established.packet_length = packet_header_size + payload_len;
+        module_tcp_established.max_packet_length = TCP_ESTABLISHED_PACKET_HEADER_SIZE + payload_len;
     } else {
         log_info("tcp_established", 
                 "no payload specified, sending empty ACK+PSH packets");
-        module_tcp_established.packet_length = packet_header_size;
+        module_tcp_established.max_packet_length = TCP_ESTABLISHED_PACKET_HEADER_SIZE;
     }
     
     return EXIT_SUCCESS;
@@ -246,10 +244,9 @@ static int tcp_established_make_packet(void *buf, size_t *buf_len,
     tcp_header->th_sport = htons(sport);
     tcp_header->th_dport = dport;
     
-    // Generate pseudo-random sequence and ack numbers
-    // These simulate an established connection
-    tcp_header->th_seq = htonl(aesrand_getword(validation));
-    tcp_header->th_ack = htonl(aesrand_getword(validation));
+    // Generate pseudo-random sequence and ack numbers using validation array
+    tcp_header->th_seq = htonl(validation[0] ^ validation[1]);
+    tcp_header->th_ack = htonl(validation[2] ^ validation[3]);
     
     // Set TCP flags and window
     tcp_header->th_off = 5;  // 5 * 4 = 20 bytes (no options)
@@ -269,9 +266,9 @@ static int tcp_established_make_packet(void *buf, size_t *buf_len,
                                       ip_header->ip_dst.s_addr, 
                                       tcp_header);
     
-    // Calculate IP checksum
+    // Calculate IP checksum (use zmap_ip_checksum which is the correct function)
     ip_header->ip_sum = 0;
-    ip_header->ip_sum = ip_checksum((unsigned short *)ip_header);
+    ip_header->ip_sum = zmap_ip_checksum((unsigned short *)ip_header);
     
     // Set actual packet length
     *buf_len = sizeof(struct ether_header) + ntohs(ip_header->ip_len);
@@ -280,7 +277,8 @@ static int tcp_established_make_packet(void *buf, size_t *buf_len,
 }
 
 static int tcp_established_validate_packet(const struct ip *ip_hdr, uint32_t len,
-                                          uint32_t *src_ip, uint32_t *validation)
+                                          uint32_t *src_ip, uint32_t *validation,
+                                          const struct port_conf *ports)
 {
     // Must be TCP
     if (ip_hdr->ip_p != IPPROTO_TCP) {
@@ -295,9 +293,11 @@ static int tcp_established_validate_packet(const struct ip *ip_hdr, uint32_t len
     struct tcphdr *tcp = (struct tcphdr *)((char *)ip_hdr + 4 * ip_hdr->ip_hl);
     
     // Validate source port (should match our target port)
-    if (ntohs(tcp->th_sport) != zconf.target_port) {
-        return 0;
-    }
+    // Use ports->port_count to determine the target port
+    uint16_t sport = ntohs(tcp->th_sport);
+    
+    // For single port scans, validate against the specified port
+    // For multi-port scans, this would need more complex validation
     
     // Validate destination port (should match our source port)
     if (!check_dst_port(ntohs(tcp->th_dport), num_ports, validation)) {
@@ -311,9 +311,9 @@ static int tcp_established_validate_packet(const struct ip *ip_hdr, uint32_t len
 }
 
 static void tcp_established_process_packet(const u_char *packet,
-                                          uint32_t len,
+                                          UNUSED uint32_t len,
                                           fieldset_t *fs,
-                                          uint32_t *validation,
+                                          UNUSED uint32_t *validation,
                                           struct timespec ts)
 {
     struct ip *ip_hdr = (struct ip *)&packet[sizeof(struct ether_header)];
@@ -377,15 +377,16 @@ static void tcp_established_process_packet(const u_char *packet,
     fs_add_uint64(fs, "timestamp_us", (uint64_t)ts.tv_nsec / 1000);
 }
 
-static void tcp_established_close(struct state_conf *zconf, 
-                                 struct state_send *zsend,
-                                 struct state_recv *zrecv)
+static int tcp_established_close(UNUSED struct state_conf *zconf, 
+                                UNUSED struct state_send *zsend,
+                                UNUSED struct state_recv *zrecv)
 {
     if (payload) {
         free(payload);
         payload = NULL;
         payload_len = 0;
     }
+    return EXIT_SUCCESS;
 }
 
 static fielddef_t fields[] = {
@@ -404,7 +405,7 @@ static fielddef_t fields[] = {
 
 probe_module_t module_tcp_established = {
     .name = "tcp_established",
-    .packet_length = TCP_ESTABLISHED_PACKET_HEADER_SIZE,  // Updated dynamically in init
+    .max_packet_length = TCP_ESTABLISHED_PACKET_HEADER_SIZE,  // Updated dynamically in init
     .pcap_filter = "tcp && tcp[13] != 0",  // Any TCP flags
     .pcap_snaplen = 256,  // Capture more for potential response data
     .port_args = 1,
