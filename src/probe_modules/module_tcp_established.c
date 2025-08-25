@@ -32,6 +32,57 @@ static uint32_t num_ports;
 static char *payload = NULL;
 static uint16_t payload_len = 0;
 
+// A correct, standard checksum implementation.
+static inline uint16_t ipv4_checksum(const void* data, size_t len)
+{
+    const uint16_t* buf = data;
+    uint64_t sum = 0;
+    while (len > 1) {
+        sum += *buf++;
+        len -= 2;
+    }
+    if (len == 1) {
+        sum += *(const uint8_t*)buf;
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    return (uint16_t)(~sum);
+}
+
+static uint16_t tcp_est_checksum(uint16_t tcp_len, uint32_t saddr, uint32_t daddr,
+                                 struct tcphdr *tcp_header)
+{
+    struct {
+        uint32_t source_address;
+        uint32_t dest_address;
+        uint8_t placeholder;
+        uint8_t protocol;
+        uint16_t tcp_length;
+    } pseudo_header;
+
+    pseudo_header.source_address = saddr;
+    pseudo_header.dest_address = daddr;
+    pseudo_header.placeholder = 0;
+    pseudo_header.protocol = IPPROTO_TCP;
+    pseudo_header.tcp_length = htons(tcp_len);
+
+    size_t total_len = sizeof(pseudo_header) + tcp_len;
+    char *checksum_buf = malloc(total_len);
+    if (!checksum_buf) {
+        log_fatal("tcp_established", "Failed to allocate memory for checksum calculation");
+        return 0;
+    }
+
+    memcpy(checksum_buf, &pseudo_header, sizeof(pseudo_header));
+    memcpy(checksum_buf + sizeof(pseudo_header), tcp_header, tcp_len);
+
+    uint16_t checksum = ipv4_checksum(checksum_buf, total_len);
+    
+    free(checksum_buf);
+    return checksum;
+}
+
 // Process escape sequences in the payload string
 char* tcp_established_process_escape_sequences(const char *input, int *out_len)
 {
@@ -241,41 +292,35 @@ static int tcp_established_make_packet(void *buf, size_t *buf_len,
     uint16_t ip_len = sizeof(struct ip) + sizeof(struct tcphdr) + payload_len;
     ip_header->ip_len = htons(ip_len);
     
-    // Configure TCP header
     uint16_t sport = get_src_port(num_ports, probe_num, validation);
     tcp_header->th_sport = htons(sport);
     tcp_header->th_dport = dport;
-    
-    // Generate pseudo-random sequence and ack numbers using validation array
     tcp_header->th_seq = htonl(validation[0] ^ validation[1]);
     tcp_header->th_ack = htonl(validation[2] ^ validation[3]);
-    
-    // Set TCP flags and window
-    tcp_header->th_off = 5;  // 5 * 4 = 20 bytes (no options)
-    tcp_header->th_flags = TH_ACK | TH_PUSH;  // ACK + PSH for data transfer
+    tcp_header->th_off = 5;
+    tcp_header->th_flags = TH_ACK | TH_PUSH;
     tcp_header->th_win = htons(65535);
     tcp_header->th_urp = 0;
     
-    // Copy payload if present
     if (payload && payload_len > 0) {
         memcpy((char *)tcp_header + sizeof(struct tcphdr), payload, payload_len);
     }
     
     // Calculate TCP checksum
     tcp_header->th_sum = 0;
-    tcp_header->th_sum = tcp_checksum(sizeof(struct tcphdr) + payload_len,
-                                      ip_header->ip_src.s_addr,
-                                      ip_header->ip_dst.s_addr, 
-                                      tcp_header);
+    uint16_t tcp_seg_len = sizeof(struct tcphdr) + payload_len;
+    tcp_header->th_sum = tcp_est_checksum(tcp_seg_len, ip_header->ip_src.s_addr,
+                                          ip_header->ip_dst.s_addr, tcp_header);
+
     
     // Calculate IP checksum (use zmap_ip_checksum which is the correct function)
     ip_header->ip_sum = 0;
     ip_header->ip_sum = zmap_ip_checksum((unsigned short *)ip_header);
     
-    // Set actual packet length
     *buf_len = sizeof(struct ether_header) + ntohs(ip_header->ip_len);
     
     return EXIT_SUCCESS;
+
 }
 
 static int tcp_established_validate_packet(const struct ip *ip_hdr, uint32_t len,
