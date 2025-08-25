@@ -236,6 +236,8 @@ static int tcp_established_make_packet(void *buf, size_t *buf_len,
     ip_header->ip_ttl = ttl;
     ip_header->ip_id = htons(ip_id);
     
+    ip_header->ip_off = htons(IP_DF);
+    
     uint16_t ip_len = sizeof(struct ip) + sizeof(struct tcphdr) + payload_len;
     ip_header->ip_len = htons(ip_len);
     
