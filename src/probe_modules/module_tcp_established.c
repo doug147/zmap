@@ -469,7 +469,7 @@ static int tcp_established_make_packet(void *buf, size_t *buf_len,
     ip_header->ip_dst.s_addr = dst_ip;
     ip_header->ip_ttl = ttl;
     ip_header->ip_id = htons(ip_id);
-    //ip_header->ip_off = htons(IP_DF);
+    ip_header->ip_off = htons(IP_DF);
     
     uint16_t tcp_header_len = sizeof(struct tcphdr) + tcp_options_len;
     uint16_t ip_len = sizeof(struct ip) + tcp_header_len + payload_len;
