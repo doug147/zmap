@@ -6,8 +6,8 @@
  * of the License at http://www.apache.org/licenses/LICENSE-2.0
  */
 
-// Probe module for sending TCP packets with configurable flags, options and payloads
-// For educational/research purposes
+// probe module for sending TCP packets with ACK+PSH flags and payloads
+// simulates established TCP connections for educational/research purposes
 
 #ifndef MODULE_TCP_ESTABLISHED_H
 #define MODULE_TCP_ESTABLISHED_H
@@ -18,7 +18,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <assert.h>
-#include <ctype.h>
 
 #include "../../lib/includes.h"
 #include "../fieldset.h"
@@ -26,7 +25,7 @@
 #include "packet.h"
 
 #define ZMAP_TCP_ESTABLISHED_PAYLOAD_MAX_LEN 1400
-#define TCP_ESTABLISHED_PACKET_HEADER_SIZE 54  // Ethernet + IP + TCP headers (no options)
+#define TCP_ESTABLISHED_PACKET_HEADER_SIZE 54  // Ethernet + IP + TCP headers
 
 // Function to print packet for debugging
 void tcp_established_print_packet(FILE *fp, void *packet);
