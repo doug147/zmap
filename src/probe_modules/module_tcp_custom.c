@@ -16,13 +16,15 @@
 #include <assert.h>
 
 #include "../../lib/includes.h"
+#include "../../lib/xalloc.h"
 #include "../fieldset.h"
 #include "probe_modules.h"
 #include "packet.h"
 #include "logger.h"
 #include "validate.h"
 
-#include "module_tcp_custom.h"
+#include "module_tcp_customscan.h"
+#include "module_tcp_synscan.h"
 
 #define MAX_PAYLOAD_SIZE 1400
 
@@ -98,7 +100,7 @@ static int customscan_global_initialize(struct state_conf *state)
                     if (strcmp(flag_token, "SYN") == 0) tcp_flags |= TH_SYN;
                     else if (strcmp(flag_token, "ACK") == 0) tcp_flags |= TH_ACK;
                     else if (strcmp(flag_token, "RST") == 0) tcp_flags |= TH_RST;
-                    else if (strcmp(flag_token, "PSH") == 0) tcp_flags |= TH_PSH;
+                    else if (strcmp(flag_token, "PSH") == 0) tcp_flags |= TH_PUSH;
                     else if (strcmp(flag_token, "FIN") == 0) tcp_flags |= TH_FIN;
                     else if (strcmp(flag_token, "URG") == 0) tcp_flags |= TH_URG;
                     else log_warn("customscan", "Unknown TCP flag: %s", flag_token);
