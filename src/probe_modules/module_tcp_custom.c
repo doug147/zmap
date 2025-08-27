@@ -30,6 +30,15 @@ static uint16_t tcp_header_len = 20; // Default TCP header length
 static bool should_validate_src_port = true; // default to validating source port
 static uint16_t num_source_ports;
 
+// Define missing TCP flags if not defined in the system headers
+#ifndef TH_ECE
+#define TH_ECE 0x40
+#endif
+
+#ifndef TH_CWR
+#define TH_CWR 0x80
+#endif
+
 // Custom TCP flags and payload settings
 static uint8_t tcp_flags = 0;
 static char *custom_payload = NULL;
