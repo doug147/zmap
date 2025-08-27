@@ -28,7 +28,7 @@
 
 #define MAX_PAYLOAD_SIZE 1400
 
-probe_module_t module_tcp_customscan;
+probe_module_t module_tcp_custom;
 
 static uint16_t num_source_ports;
 static char *payload = NULL;
