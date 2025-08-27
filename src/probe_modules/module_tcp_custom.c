@@ -122,7 +122,7 @@ static int customscan_global_initialize(struct state_conf *state)
         log_fatal("customscan", "Payload size exceeds MAX_PAYLOAD_SIZE");
     }
 
-    module_tcp_customscan.max_packet_length = sizeof(struct ether_header) + sizeof(struct ip) + sizeof(struct tcphdr) + payload_len;
+    module_tcp_custom.max_packet_length = sizeof(struct ether_header) + sizeof(struct ip) + sizeof(struct tcphdr) + payload_len;
     return EXIT_SUCCESS;
 }
 
@@ -252,8 +252,8 @@ static fielddef_t fields[] = {
 };
 
 
-probe_module_t module_tcp_customscan = {
-    .name = "tcp_customscan",
+probe_module_t module_tcp_custom = {
+    .name = "tcp_custom",
     .pcap_filter = "tcp",
     .pcap_snaplen = 96,
     .port_args = 1,
