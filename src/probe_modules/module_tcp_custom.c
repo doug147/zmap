@@ -117,6 +117,20 @@ static char *parse_escapes(const char *input, size_t *output_len)
 
     output[j] = '\0';
     *output_len = j;
+    
+    // Debug the payload after parsing
+    log_debug("tcp_custom", "Parsed payload (length %zu):", *output_len);
+    for (size_t k = 0; k < *output_len && k < 10; k++) {
+        if (isprint(output[k])) {
+            log_debug("tcp_custom", "  byte %zu: '%c' (0x%02x)", k, output[k], (unsigned char)output[k]);
+        } else {
+            log_debug("tcp_custom", "  byte %zu: 0x%02x", k, (unsigned char)output[k]);
+        }
+    }
+    if (*output_len > 10) {
+        log_debug("tcp_custom", "  ... (showing only first 10 bytes)");
+    }
+    
     return output;
 }
 
@@ -155,6 +169,7 @@ static uint8_t parse_tcp_flags(const char *flags_str)
     }
 
     free(flags_copy);
+    log_debug("tcp_custom", "Parsed TCP flags: 0x%02x", flags);
     return flags;
 }
 
@@ -224,7 +239,7 @@ static int custom_global_initialize(struct state_conf *state)
 
     // Calculate total packet length based on payload
     size_t total_len = sizeof(struct ether_header) + sizeof(struct ip) + tcp_header_len;
-    if (custom_payload) {
+    if (custom_payload && payload_len > 0) {
         total_len += payload_len;
     }
     
@@ -242,22 +257,13 @@ static int custom_prepare_packet(void *buf, macaddr_t *src, macaddr_t *gw, UNUSE
     struct ether_header *eth_header = (struct ether_header *)buf;
     make_eth_header(eth_header, src, gw);
     
-    // IP header
+    // IP header - don't set the length yet
     struct ip *ip_header = (struct ip *)(&eth_header[1]);
-    uint16_t ip_len = htons(sizeof(struct ip) + tcp_header_len + payload_len);
-    make_ip_header(ip_header, IPPROTO_TCP, ip_len);
+    make_ip_header(ip_header, IPPROTO_TCP, 0); // Length will be set in make_packet
     
     // Set DF flag on IP header
     ip_header->ip_off |= htons(IP_DF);
-    
-    // TCP header
-    struct tcphdr *tcp_header = (struct tcphdr *)(&ip_header[1]);
-    tcp_header->th_off = tcp_header_len / 4; // Header length in 32-bit words
-    tcp_header->th_win = htons(tcp_window);
-    
-    // Set user-defined flags or leave them all at 0
-    tcp_header->th_flags = tcp_flags;
-    
+
     return EXIT_SUCCESS;
 }
 
@@ -267,7 +273,6 @@ static int custom_make_packet(void *buf, size_t *buf_len, ipaddr_n_t src_ip, ipa
 {
     struct ether_header *eth_header = (struct ether_header *)buf;
     struct ip *ip_header = (struct ip *)(&eth_header[1]);
-    struct tcphdr *tcp_header = (struct tcphdr *)(&ip_header[1]);
     
     // Set IP header fields
     ip_header->ip_src.s_addr = src_ip;
@@ -275,7 +280,20 @@ static int custom_make_packet(void *buf, size_t *buf_len, ipaddr_n_t src_ip, ipa
     ip_header->ip_ttl = ttl;
     ip_header->ip_id = ip_id;
     
-    // Set TCP header fields
+    // Pointer to the TCP header
+    struct tcphdr *tcp_header = (struct tcphdr *)(&ip_header[1]);
+    
+    // Clear the TCP header area
+    memset(tcp_header, 0, tcp_header_len);
+    
+    // Set basic TCP header fields
+    tcp_header->th_off = tcp_header_len / 4; // Header length in 32-bit words
+    tcp_header->th_win = htons(tcp_window);
+    
+    // Set TCP flags
+    tcp_header->th_flags = tcp_flags;
+    
+    // Set TCP port fields
     port_h_t sport = get_src_port(num_source_ports, probe_num, validation);
     tcp_header->th_sport = htons(sport);
     tcp_header->th_dport = dport;
@@ -297,24 +315,43 @@ static int custom_make_packet(void *buf, size_t *buf_len, ipaddr_n_t src_ip, ipa
         tcp_header->th_ack = 0;
     }
     
+    // Calculate total packet length
+    size_t packet_len = sizeof(struct ether_header) + sizeof(struct ip) + tcp_header_len;
+    
     // Add payload if it exists
     if (custom_payload && payload_len > 0) {
-        char *payload_ptr = (char *)tcp_header + tcp_header_len;
+        // Calculate where payload should go
+        unsigned char *payload_ptr = (unsigned char *)buf + packet_len;
+        
+        // Copy payload data
         memcpy(payload_ptr, custom_payload, payload_len);
+        
+        // Update packet length
+        packet_len += payload_len;
+        
+        log_debug("tcp_custom", "Added payload of %zu bytes at offset %zu", 
+                 payload_len, (size_t)(payload_ptr - (unsigned char *)buf));
     }
     
-    // Calculate TCP checksum
+    // Set IP total length (IP header + TCP header + payload)
+    ip_header->ip_len = htons(sizeof(struct ip) + tcp_header_len + 
+                             (custom_payload ? payload_len : 0));
+    
+    // Calculate TCP checksum (must include payload in checksum calculation)
     tcp_header->th_sum = 0;
-    size_t tcp_total_len = tcp_header_len + payload_len;
+    size_t tcp_total_len = tcp_header_len + (custom_payload ? payload_len : 0);
     tcp_header->th_sum = tcp_checksum(tcp_total_len, ip_header->ip_src.s_addr,
                                       ip_header->ip_dst.s_addr, tcp_header);
     
-    // Calculate IP checksum
+    // Calculate IP header checksum
     ip_header->ip_sum = 0;
     ip_header->ip_sum = zmap_ip_checksum((unsigned short *)ip_header);
     
     // Set total packet length
-    *buf_len = sizeof(struct ether_header) + sizeof(struct ip) + tcp_header_len + payload_len;
+    *buf_len = packet_len;
+    
+    log_debug("tcp_custom", "Final packet length: %zu bytes (TCP length: %zu, with payload: %d)", 
+             *buf_len, tcp_total_len, custom_payload != NULL);
     
     return EXIT_SUCCESS;
 }
