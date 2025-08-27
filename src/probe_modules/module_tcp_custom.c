@@ -23,7 +23,7 @@
 #include "logger.h"
 #include "validate.h"
 
-#include "module_tcp_customscan.h"
+#include "module_tcp_custom.h"
 #include "module_tcp_synscan.h"
 
 #define MAX_PAYLOAD_SIZE 1400
