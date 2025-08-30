@@ -688,43 +688,30 @@ static void customscan_process_packet(const u_char *packet,
     struct ip *ip_hdr = (struct ip *)&packet[sizeof(struct ether_header)];
     struct tcphdr *tcp = (struct tcphdr *)((char *)ip_hdr + 4*ip_hdr->ip_hl);
 
+    // Add fields in the exact order they're defined in the fields array
     fs_add_uint64(fs, "sport", (uint64_t)ntohs(tcp->th_sport));
     fs_add_uint64(fs, "dport", (uint64_t)ntohs(tcp->th_dport));
     fs_add_uint64(fs, "seqnum", (uint64_t)ntohl(tcp->th_seq));
     fs_add_uint64(fs, "acknum", (uint64_t)ntohl(tcp->th_ack));
     fs_add_uint64(fs, "window", (uint64_t)ntohs(tcp->th_win));
-
-    // Add TCP flags as individual fields
+    
+    // Add TCP flags
     fs_add_bool(fs, "flag_syn", (tcp->th_flags & TH_SYN) ? 1 : 0);
     fs_add_bool(fs, "flag_ack", (tcp->th_flags & TH_ACK) ? 1 : 0);
     fs_add_bool(fs, "flag_rst", (tcp->th_flags & TH_RST) ? 1 : 0);
     fs_add_bool(fs, "flag_psh", (tcp->th_flags & TH_PUSH) ? 1 : 0);
     fs_add_bool(fs, "flag_fin", (tcp->th_flags & TH_FIN) ? 1 : 0);
     fs_add_bool(fs, "flag_urg", (tcp->th_flags & TH_URG) ? 1 : 0);
-
-    // Classification based on response type
-    if (tcp->th_flags & TH_RST) {
-        fs_add_constchar(fs, "classification", "rst");
-        fs_add_bool(fs, "success", 0);
-    } else if ((tcp->th_flags & (TH_SYN|TH_ACK)) == (TH_SYN|TH_ACK)) {
-        fs_add_constchar(fs, "classification", "synack");
-        fs_add_bool(fs, "success", 1);
-    } else if (tcp->th_flags & TH_ACK) {
-        fs_add_constchar(fs, "classification", "ack");
-        fs_add_bool(fs, "success", 1);
-    } else {
-        fs_add_constchar(fs, "classification", "other");
-        fs_add_bool(fs, "success", 0);
-    }
-
-    // Parse and report TCP options from response
+    
+    // Parse TCP options to check for TFO
     int tcp_data_offset = tcp->th_off * 4;
     int options_len = tcp_data_offset - sizeof(struct tcphdr);
+    int has_tfo = 0;
+    uint64_t tfo_cookie_len = 0;
     
     if (options_len > 0 && options_len <= 40) {
         uint8_t *options = (uint8_t *)tcp + sizeof(struct tcphdr);
         int offset = 0;
-        int has_tfo = 0;
         
         while (offset < options_len) {
             uint8_t kind = options[offset];
@@ -744,16 +731,29 @@ static void customscan_process_packet(const u_char *packet,
             // Check for TFO option in response
             if (kind == TCPOPT_TFO) {
                 has_tfo = 1;
-                fs_add_uint64(fs, "tfo_cookie_len", (uint64_t)(length - 2));
+                tfo_cookie_len = (uint64_t)(length - 2);
             }
             
             offset += length;
         }
-        
-        fs_add_bool(fs, "has_tfo", has_tfo);
+    }
+    
+    fs_add_bool(fs, "has_tfo", has_tfo);
+    fs_add_uint64(fs, "tfo_cookie_len", tfo_cookie_len);
+    
+    // Classification and success must be last (part of CLASSIFICATION_SUCCESS_FIELDSET_FIELDS)
+    if (tcp->th_flags & TH_RST) {
+        fs_add_constchar(fs, "classification", "rst");
+        fs_add_bool(fs, "success", 0);
+    } else if ((tcp->th_flags & (TH_SYN|TH_ACK)) == (TH_SYN|TH_ACK)) {
+        fs_add_constchar(fs, "classification", "synack");
+        fs_add_bool(fs, "success", 1);
+    } else if (tcp->th_flags & TH_ACK) {
+        fs_add_constchar(fs, "classification", "ack");
+        fs_add_bool(fs, "success", 1);
     } else {
-        fs_add_bool(fs, "has_tfo", 0);
-        fs_add_uint64(fs, "tfo_cookie_len", 0);
+        fs_add_constchar(fs, "classification", "other");
+        fs_add_bool(fs, "success", 0);
     }
 }
 
